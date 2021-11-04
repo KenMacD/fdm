@@ -216,18 +216,23 @@ imap_tag(char *line)
 
 /* Base64 encode string. */
 char *
-imap_base64_encode(char *in)
+imap_base64_encode_bytes(char *in, size_t len)
 {
 	char	*out;
 	size_t	 size;
 
-	size = (strlen(in) * 2) + 1;
+	size = (len * 2) + 1;
 	out = xcalloc(1, size);
-	if (b64_ntop(in, strlen(in), out, size) < 0) {
+	if (b64_ntop(in, len, out, size) < 0) {
 		xfree(out);
 		return (NULL);
 	}
 	return (out);
+}
+
+char *
+imap_base64_encode(char *in) {
+	return imap_base64_encode_bytes(in, strlen(in));
 }
 
 /* Base64 decode string. */
@@ -567,8 +572,8 @@ int
 imap_state_plain_auth(struct account *a, struct fetch_ctx *fctx)
 {
 	struct fetch_imap_data	*data = a->data;
-	char			*line, *ptr, *out;
-	size_t			 outlen;
+	char			*line, *ptr, *src, *b64;
+	size_t			 srclen;
 
 	if (imap_getln(a, fctx, IMAP_CONTINUE, &line) != 0)
 		return (FETCH_ERROR);
@@ -581,19 +586,20 @@ imap_state_plain_auth(struct account *a, struct fetch_ctx *fctx)
 	if (*ptr != '\0' && strcmp(ptr, "\"\"") != 0)
 		return (imap_invalid(a, line));
 
-	outlen = 1 + strlen(data->user) + 1 + strlen(data->pass);
-	out = xcalloc(1, outlen);
-	memcpy(out + 1, data->user, strlen(data->user));
-	memcpy(out + 1 + strlen(data->user) + 1, data->pass,
+	/* base64("\0USER\0PASS") */
+	srclen = 1 + strlen(data->user) + 1 + strlen(data->pass);
+	src = xcalloc(1, srclen);
+	memcpy(src + 1, data->user, strlen(data->user));
+	memcpy(src + 1 + strlen(data->user) + 1, data->pass,
 	    strlen(data->pass));
-	if (data->putn(a, out, outlen) != 0) {
-		xfree(out);
+	b64 = imap_base64_encode_bytes(src, srclen);
+	xfree(src);
+
+	if (imap_putln(a, "%s", b64) != 0) {
+		xfree(b64);
 		return (FETCH_ERROR);
 	}
-	xfree(out);
-
-	if (imap_putln(a, "") != 0)
-		return (FETCH_ERROR);
+	xfree(b64);
 
 	fctx->state = imap_state_pass;
 	return (FETCH_BLOCK);
